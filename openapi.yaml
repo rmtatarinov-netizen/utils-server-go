@@ -1,0 +1,412 @@
+openapi: 3.1.0
+
+info:
+  title: Utils — HTTP API пользователей
+  version: 1.1.0
+  summary: Учебный API на Go + SQLite
+  description: |
+    HTTP API для создания пользователей, получения их по `id`, работы с
+    Argon2id-паролями и просмотра списка активных пользователей.
+
+    Данные хранятся в SQLite, схема создаётся автоматически. Все SQL-запросы
+    параметризованы. Пароли хранятся только в виде Argon2id-хешей, никогда не
+    возвращаются по HTTP и не логируются. Аутентификации и сессий нет — это
+    учебный проект; для production используйте HTTPS и обратный прокси.
+  license:
+    name: MIT
+    identifier: MIT
+
+servers:
+  - url: http://127.0.0.1:8000
+    description: Локальный Go-сервер
+
+security: []
+
+tags:
+  - name: users
+    description: Операции с пользователями и паролями
+  - name: presence
+    description: Активные пользователи
+
+paths:
+  /adduser:
+    post:
+      tags:
+        - users
+      operationId: addUser
+      summary: Создать пользователя
+      description: |
+        Создаёт пользователя. Пробелы по краям `name` обрезаются.
+        Тег `new` добавляется автоматически, если его ещё нет.
+        Созданный пользователь попадает в список активных.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddUserRequest'
+            examples:
+              withTags:
+                summary: С тегами
+                value:
+                  name: alice
+                  tags:
+                    - vip
+              minimal:
+                summary: Только имя
+                value:
+                  name: bob
+      responses:
+        '201':
+          description: Пользователь создан
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserIdResponse'
+              examples:
+                created:
+                  value:
+                    id: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '409':
+          description: Пользователь с таким именем уже существует
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                duplicate:
+                  value:
+                    error: user already exists
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /user/{user_id}:
+    get:
+      tags:
+        - users
+      operationId: getUserById
+      summary: Получить пользователя по id
+      description: |
+        Возвращает пользователя без пароля. Успешно полученный пользователь
+        попадает в список активных.
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: Пользователь найден
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+              examples:
+                found:
+                  value:
+                    id: 1
+                    name: alice
+                    tags:
+                      - vip
+                      - new
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /user/{user_id}/password:
+    put:
+      tags:
+        - users
+      operationId: setUserPassword
+      summary: Установить или заменить пароль
+      description: |
+        Хеширует пароль через Argon2id и сохраняет только хеш.
+        Пароль не возвращается и не логируется.
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordRequest'
+            examples:
+              secret:
+                value:
+                  password: s3cret
+      responses:
+        '204':
+          description: Пароль установлен
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /user/{user_id}/password/verify:
+    post:
+      tags:
+        - users
+      operationId: verifyUserPassword
+      summary: Проверить пароль
+      description: |
+        Сравнивает пароль с сохранённым Argon2id-хешем. Если пароль ещё не
+        установлен, возвращает `valid: false` со статусом `200`.
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordRequest'
+            examples:
+              secret:
+                value:
+                  password: s3cret
+      responses:
+        '200':
+          description: Результат проверки
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyPasswordResponse'
+              examples:
+                valid:
+                  value:
+                    valid: true
+                invalid:
+                  value:
+                    valid: false
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /active:
+    get:
+      tags:
+        - presence
+      operationId: getActiveUsers
+      summary: Получить активных пользователей
+      description: |
+        Возвращает идентификаторы недавно созданных или прочитанных
+        пользователей. Список хранится в памяти, ограничен
+        `ACTIVE_USERS_LIMIT` и сбрасывается при перезапуске сервера.
+        Идентификаторы уникальны: повторный доступ перемещает пользователя
+        в конец списка.
+      responses:
+        '200':
+          description: Список активных пользователей
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActiveUsersResponse'
+              examples:
+                empty:
+                  value:
+                    active_users: []
+                nonEmpty:
+                  value:
+                    active_users:
+                      - 1
+                      - 2
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+components:
+  parameters:
+    UserId:
+      name: user_id
+      in: path
+      required: true
+      description: Идентификатор пользователя
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+      example: 1
+
+  schemas:
+    AddUserRequest:
+      type: object
+      description: Тело запроса создания пользователя
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          description: Имя пользователя (пробелы по краям обрезаются)
+          minLength: 1
+          pattern: '\S'
+          examples:
+            - alice
+        tags:
+          type: array
+          description: Необязательные теги
+          default: []
+          items:
+            type: string
+            minLength: 1
+          examples:
+            - - vip
+
+    User:
+      type: object
+      description: Пользователь
+      required:
+        - id
+        - name
+        - tags
+      properties:
+        id:
+          type: integer
+          format: int64
+          examples:
+            - 1
+        name:
+          type: string
+          examples:
+            - alice
+        tags:
+          type: array
+          items:
+            type: string
+          examples:
+            - - vip
+              - new
+
+    UserIdResponse:
+      type: object
+      description: Идентификатор созданного пользователя
+      required:
+        - id
+      properties:
+        id:
+          type: integer
+          format: int64
+          examples:
+            - 1
+
+    PasswordRequest:
+      type: object
+      description: Пароль
+      required:
+        - password
+      properties:
+        password:
+          type: string
+          description: Пароль (1–1024 символа)
+          minLength: 1
+          maxLength: 1024
+          examples:
+            - s3cret
+
+    VerifyPasswordResponse:
+      type: object
+      description: Результат проверки пароля
+      required:
+        - valid
+      properties:
+        valid:
+          type: boolean
+          examples:
+            - true
+
+    ActiveUsersResponse:
+      type: object
+      description: Активные пользователи
+      required:
+        - active_users
+      properties:
+        active_users:
+          type: array
+          items:
+            type: integer
+            format: int64
+          examples:
+            - - 1
+              - 2
+
+    ErrorResponse:
+      type: object
+      description: Ответ с ошибкой
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          examples:
+            - user not found
+
+  responses:
+    BadRequest:
+      description: |
+        Неверный запрос: тело не JSON-объект, пустое или нестроковое `name`,
+        `tags` не является массивом строк, пароль пустой или слишком длинный.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            invalidBody:
+              value:
+                error: request body must be a JSON object
+            invalidName:
+              value:
+                error: "'name' must be a non-empty string"
+            invalidTags:
+              value:
+                error: "'tags' must be a list of strings"
+            invalidPassword:
+              value:
+                error: "'password' must be a non-empty string of at most 1024 characters"
+
+    NotFound:
+      description: Пользователь не найден (или `user_id` не является числом)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            userNotFound:
+              value:
+                error: user not found
+            invalidId:
+              value:
+                error: not found
+
+    MethodNotAllowed:
+      description: HTTP-метод не поддерживается
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            methodNotAllowed:
+              value:
+                error: method not allowed
+
+    InternalError:
+      description: Внутренняя ошибка сервера
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            internal:
+              value:
+                error: internal server error

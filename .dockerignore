@@ -1,0 +1,17 @@
+.git/
+.gitignore
+.github/
+.idea/
+.vscode/
+bin/
+coverage.out
+*_test.go
+*.db
+*.db-wal
+*.db-shm
+README.md
+LICENSE
+Makefile
+openapi.yaml
+docker-compose.yml
+.env

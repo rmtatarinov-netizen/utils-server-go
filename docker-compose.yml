@@ -1,0 +1,21 @@
+name: utils-server-go
+
+services:
+  api:
+    build:
+      context: .
+    image: "${IMAGE_NAME:-utils-server-go}:${IMAGE_TAG:-latest}"
+    container_name: utils-server-go
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      PORT: "8000"
+      DB_PATH: /data/users.db
+      ACTIVE_USERS_LIMIT: "${ACTIVE_USERS_LIMIT:-5}"
+    volumes:
+      - utils-data:/data
+
+volumes:
+  utils-data:
+    name: utils-data
